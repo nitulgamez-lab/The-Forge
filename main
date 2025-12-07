@@ -2410,11 +2410,15 @@ local autoSell = {
 	enabled = false,
 	selectedItems = {},
 	interval = 10,
+	sellAmount = 100, -- Default max sell amount
 }
 
--- Use existing oreOptions for the dropdown
-if not autoSell.selectedItems or #autoSell.selectedItems == 0 then
-	autoSell.selectedItems = { oreOptions[1] or "Any" }
+-- Initial options
+local currentInvOptions = {}
+if #oreOptions > 0 then
+	currentInvOptions = {unpack(oreOptions)}
+else
+	currentInvOptions = {"Click Refresh Inventory"}
 end
 
 local function getInventoryFromUI()
@@ -2422,80 +2426,72 @@ local function getInventoryFromUI()
 	local pg = LocalPlayer:FindFirstChild("PlayerGui")
 	if not pg then return inv end
 	
-	-- Recursive function to find the inventory container
-	local function findInventoryContainer(parent, depth)
-		if depth > 4 then return nil end
-		
-		for _, child in ipairs(parent:GetChildren()) do
-			-- Check if this child looks like an inventory
-			local name = child.Name:lower()
-			if (name:find("item") or name:find("inv") or name:find("bag") or name:find("ore") or name:find("scroll") or name:find("grid")) and (child:IsA("ScrollingFrame") or child:IsA("Frame")) then
-				-- Check contents: Does it have children with "x" quantities?
-				local hasQuantities = false
-				for _, item in ipairs(child:GetChildren()) do
-					if item:IsA("Frame") or item:IsA("ImageLabel") then
-						for _, desc in ipairs(item:GetDescendants()) do
-							if desc:IsA("TextLabel") and (desc.Text:find("x%d") or desc.Text:match("^%d+$")) then
-								hasQuantities = true
-								break
-							end
-						end
-					end
-					if hasQuantities then break end
-				end
-				if hasQuantities then return child end
-			end
-			
-			-- Search deeper
-			if child:IsA("Frame") or child:IsA("ScreenGui") or child:IsA("Folder") then
-				local found = findInventoryContainer(child, depth + 1)
-				if found then return found end
-			end
-		end
-		return nil
-	end
-
+	-- Specific path provided by user:
+	-- Menu.Frame.Frame.Menus.Stash.Background.[ItemName].Main.Quantity / .ItemName
 	local menu = pg:FindFirstChild("Menu")
-	local itemsCont = menu and findInventoryContainer(menu, 1)
+	local frame1 = menu and menu:FindFirstChild("Frame")
+	local frame2 = frame1 and frame1:FindFirstChild("Frame")
+	local menus = frame2 and frame2:FindFirstChild("Menus")
+	local stash = menus and menus:FindFirstChild("Stash")
+	local container = stash and stash:FindFirstChild("Background")
 	
-	if not itemsCont then 
-		print("[Forge] Debug: Could not find Inventory UI in PlayerGui.Menu")
+	if not container then 
+		-- Fallback check if path is slightly different (e.g. direct child of stash)
+		container = stash 
+	end
+	
+	if not container then
+		-- Only warn if auto sell is actually trying to run
+		if autoSell.enabled then
+			print("[Forge] Debug: Could not find Stash UI at PlayerGui.Menu.Frame.Frame.Menus.Stash.Background")
+		end
 		return inv 
 	end
 	
-	for _, itemFrame in ipairs(itemsCont:GetChildren()) do
-		if itemFrame:IsA("Frame") or itemFrame:IsA("ImageLabel") then
-			-- Attempt to resolve Item Name
-			local name = itemFrame.Name
-			local nameLabel = itemFrame:FindFirstChild("Name") or itemFrame:FindFirstChild("Title") or itemFrame:FindFirstChild("ItemName")
-			if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text ~= "" then
-				name = nameLabel.Text
-			end
+	for _, itemFrame in ipairs(container:GetChildren()) do
+		local main = itemFrame:FindFirstChild("Main")
+		if main then
+			local nameLbl = main:FindFirstChild("ItemName")
+			local qtyLbl = main:FindFirstChild("Quantity")
 			
-			-- Attempt to resolve Amount
-			local amt = 1
-			-- Search for Amount/Count label
-			for _, child in ipairs(itemFrame:GetDescendants()) do
-				if child:IsA("TextLabel") then
-					local txt = child.Text
-					if txt:find("x") or tonumber(txt) then
-						local clean = txt:gsub("x", ""):gsub("%s+", "")
-						local n = tonumber(clean)
-						if n and n > 0 then
-							amt = n
-							break
-						end
-					end
+			if nameLbl and qtyLbl and nameLbl:IsA("TextLabel") and qtyLbl:IsA("TextLabel") then
+				local name = nameLbl.Text
+				local qtyStr = qtyLbl.Text -- e.g. "x32"
+				local qty = tonumber(qtyStr:match("%d+")) or 0
+				
+				if name and name ~= "" and qty > 0 then
+					inv[name] = qty
 				end
-			end
-			
-			if name and name ~= "" and name ~= "UIGridLayout" and name ~= "UIPadding" then
-				inv[name] = (inv[name] or 0) + amt
 			end
 		end
 	end
 	
 	return inv
+end
+
+local InvDropdown -- Forward declaration
+
+local function RefreshInventoryList()
+	local inv = getInventoryFromUI()
+	local options = {}
+	for name, _ in pairs(inv) do
+		table.insert(options, name)
+	end
+	table.sort(options)
+	
+	if #options == 0 then
+		options = {"No items found (Open Stash)"}
+	end
+	
+	currentInvOptions = options
+	
+	if InvDropdown then
+		InvDropdown:Set({
+			Options = currentInvOptions,
+			CurrentOption = {} -- Reset selection to avoid confusion or keep existing valid ones
+		})
+	end
+	print("[Forge] Refreshed inventory list. Found " .. #options .. " items.")
 end
 
 local function performAutoSell()
@@ -2504,33 +2500,19 @@ local function performAutoSell()
 	local hasItems = false
 	
 	local selectedSet = listToSet(autoSell.selectedItems)
+	local batchSize = tonumber(autoSell.sellAmount) or 100
 	
-	-- Debug: Print inventory found
-	local count = 0
-	for k,v in pairs(inv) do count = count + 1 end
-	if count > 0 then
-		print("[Forge] Inventory Found:", HttpService:JSONEncode(inv))
-	else
-		-- If inventory is empty, maybe warn user to open bag?
-		-- print("[Forge] No items found in UI. Open your bag?")
-	end
+	-- Debug: Print inventory found (throttled)
+	-- print("[Forge] Inventory Scan:", HttpService:JSONEncode(inv))
 	
 	for itemName, amount in pairs(inv) do
-		-- If user selected "Any", sell everything found in oreOptions
-		local isSelected = selectedSet[itemName]
-		if not isSelected and (selectedSet["Any"] or #autoSell.selectedItems == 0) then
-			-- Check if itemName is actually an ore (fuzzy match against oreOptions)
-			for _, v in ipairs(oreOptions) do
-				if v == itemName or itemName:find(v) then
-					isSelected = true
-					break
-				end
+		if selectedSet[itemName] and amount > 0 then
+			-- Respect batch size (slider)
+			local sellQty = math.min(amount, batchSize)
+			if sellQty > 0 then
+				basket[itemName] = sellQty
+				hasItems = true
 			end
-		end
-
-		if isSelected and amount > 0 then
-			basket[itemName] = amount
-			hasItems = true
 		end
 	end
 	
@@ -2582,16 +2564,34 @@ AutoSellTab:CreateToggle({
 	end,
 })
 
-AutoSellTab:CreateDropdown({
-	Name = "Items to Sell",
-	Options = oreOptions,
+AutoSellTab:CreateButton({
+	Name = "Refresh Inventory List",
+	Callback = function()
+		RefreshInventoryList()
+	end,
+})
+
+InvDropdown = AutoSellTab:CreateDropdown({
+	Name = "Items to Sell (Select from Inv)",
+	Options = currentInvOptions,
 	MultipleOptions = true,
-	CurrentOption = autoSell.selectedItems,
+	CurrentOption = {},
 	Flag = "Forge_AutoSellItems",
 	Callback = function(opts)
-		if type(opts) == "table" and #opts > 0 then
+		if type(opts) == "table" then
 			autoSell.selectedItems = opts
 		end
+	end,
+})
+
+AutoSellTab:CreateSlider({
+	Name = "Sell Amount (Batch Size)",
+	Range = { 1, 1000 },
+	Increment = 1,
+	CurrentValue = 100,
+	Flag = "Forge_AutoSellAmount",
+	Callback = function(v)
+		autoSell.sellAmount = v
 	end,
 })
 
