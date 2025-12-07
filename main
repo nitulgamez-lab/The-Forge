@@ -2480,10 +2480,8 @@ local function RefreshInventoryList()
 	currentInvOptions = options
 	
 	if InvDropdown then
-		InvDropdown:Set({
-			Options = currentInvOptions,
-			CurrentOption = {} 
-		})
+		-- Use Refresh to update the list of options
+		InvDropdown:Refresh(currentInvOptions, {})
 	end
 	print("[Forge] Refreshed inventory list. Found " .. #options .. " items.")
 end
