@@ -2422,51 +2422,66 @@ local function getInventoryFromUI()
 	local pg = LocalPlayer:FindFirstChild("PlayerGui")
 	if not pg then return inv end
 	
-	-- Try to locate the items container based on observed structure
-	-- Path: Menu -> Frame -> Frame -> Menus -> Items (speculative based on Tools path)
-	local menu = pg:FindFirstChild("Menu")
-	local frame1 = menu and menu:FindFirstChild("Frame")
-	local frame2 = frame1 and frame1:FindFirstChild("Frame")
-	local menus = frame2 and frame2:FindFirstChild("Menus")
-	
-	if not menus then return inv end
-	
-	-- Look for 'Items', 'Bag', 'Inventory' or 'Ores'
-	local itemsCont = menus:FindFirstChild("Items") or menus:FindFirstChild("Inventory") or menus:FindFirstChild("Bag") or menus:FindFirstChild("Ores")
-	
-	if not itemsCont then 
-		-- Fallback: check all children of menus for a scrolling frame that looks like inventory
-		for _, child in ipairs(menus:GetChildren()) do
-			if child:FindFirstChild("ScrollingFrame") or child:FindFirstChild("Grid") then
-				itemsCont = child
-				break
+	-- Recursive function to find the inventory container
+	local function findInventoryContainer(parent, depth)
+		if depth > 4 then return nil end
+		
+		for _, child in ipairs(parent:GetChildren()) do
+			-- Check if this child looks like an inventory
+			local name = child.Name:lower()
+			if (name:find("item") or name:find("inv") or name:find("bag") or name:find("ore") or name:find("scroll") or name:find("grid")) and (child:IsA("ScrollingFrame") or child:IsA("Frame")) then
+				-- Check contents: Does it have children with "x" quantities?
+				local hasQuantities = false
+				for _, item in ipairs(child:GetChildren()) do
+					if item:IsA("Frame") or item:IsA("ImageLabel") then
+						for _, desc in ipairs(item:GetDescendants()) do
+							if desc:IsA("TextLabel") and (desc.Text:find("x%d") or desc.Text:match("^%d+$")) then
+								hasQuantities = true
+								break
+							end
+						end
+					end
+					if hasQuantities then break end
+				end
+				if hasQuantities then return child end
+			end
+			
+			-- Search deeper
+			if child:IsA("Frame") or child:IsA("ScreenGui") or child:IsA("Folder") then
+				local found = findInventoryContainer(child, depth + 1)
+				if found then return found end
 			end
 		end
+		return nil
+	end
+
+	local menu = pg:FindFirstChild("Menu")
+	local itemsCont = menu and findInventoryContainer(menu, 1)
+	
+	if not itemsCont then 
+		print("[Forge] Debug: Could not find Inventory UI in PlayerGui.Menu")
+		return inv 
 	end
 	
-	if not itemsCont then return inv end
-	
-	local scroll = itemsCont:FindFirstChild("ScrollingFrame") or itemsCont:FindFirstChild("Frame") or itemsCont
-	
-	for _, itemFrame in ipairs(scroll:GetChildren()) do
+	for _, itemFrame in ipairs(itemsCont:GetChildren()) do
 		if itemFrame:IsA("Frame") or itemFrame:IsA("ImageLabel") then
 			-- Attempt to resolve Item Name
 			local name = itemFrame.Name
-			local nameLabel = itemFrame:FindFirstChild("Name") or itemFrame:FindFirstChild("Title")
+			local nameLabel = itemFrame:FindFirstChild("Name") or itemFrame:FindFirstChild("Title") or itemFrame:FindFirstChild("ItemName")
 			if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text ~= "" then
 				name = nameLabel.Text
 			end
 			
 			-- Attempt to resolve Amount
 			local amt = 1
-			-- Search for Amount/Count label or any number label
-			for _, child in ipairs(itemFrame:GetChildren()) do
+			-- Search for Amount/Count label
+			for _, child in ipairs(itemFrame:GetDescendants()) do
 				if child:IsA("TextLabel") then
 					local txt = child.Text
 					if txt:find("x") or tonumber(txt) then
 						local clean = txt:gsub("x", ""):gsub("%s+", "")
 						local n = tonumber(clean)
-						if n then
+						if n and n > 0 then
 							amt = n
 							break
 						end
@@ -2490,13 +2505,23 @@ local function performAutoSell()
 	
 	local selectedSet = listToSet(autoSell.selectedItems)
 	
+	-- Debug: Print inventory found
+	local count = 0
+	for k,v in pairs(inv) do count = count + 1 end
+	if count > 0 then
+		print("[Forge] Inventory Found:", HttpService:JSONEncode(inv))
+	else
+		-- If inventory is empty, maybe warn user to open bag?
+		-- print("[Forge] No items found in UI. Open your bag?")
+	end
+	
 	for itemName, amount in pairs(inv) do
 		-- If user selected "Any", sell everything found in oreOptions
 		local isSelected = selectedSet[itemName]
-		if not isSelected and selectedSet["Any"] then
-			-- Check if itemName is actually an ore
+		if not isSelected and (selectedSet["Any"] or #autoSell.selectedItems == 0) then
+			-- Check if itemName is actually an ore (fuzzy match against oreOptions)
 			for _, v in ipairs(oreOptions) do
-				if v == itemName then
+				if v == itemName or itemName:find(v) then
 					isSelected = true
 					break
 				end
@@ -2517,23 +2542,25 @@ local function performAutoSell()
 			}
 		}
 		
-		local servicePath = ReplicatedStorage:FindFirstChild("Shared")
-			and ReplicatedStorage.Shared:FindFirstChild("Packages")
-			and ReplicatedStorage.Shared.Packages:FindFirstChild("Knit")
-			and ReplicatedStorage.Shared.Packages.Knit:FindFirstChild("Services")
-			and ReplicatedStorage.Shared.Packages.Knit.Services:FindFirstChild("DialogueService")
+		print("[Forge] Attempting to sell:", HttpService:JSONEncode(basket))
+		
+		-- Use exact path provided by user
+		local rs = game:GetService("ReplicatedStorage")
+		local shared = rs:WaitForChild("Shared", 2)
+		local packages = shared and shared:WaitForChild("Packages", 2)
+		local knit = packages and packages:WaitForChild("Knit", 2)
+		local services = knit and knit:WaitForChild("Services", 2)
+		local dialogue = services and services:WaitForChild("DialogueService", 2)
+		local rf = dialogue and dialogue:WaitForChild("RF", 2)
+		local runCmd = rf and rf:WaitForChild("RunCommand", 2)
 			
-		if servicePath then
-			local rf = servicePath:FindFirstChild("RF")
-			local runCmd = rf and rf:FindFirstChild("RunCommand")
-			if runCmd then
-				pcall(function()
-					runCmd:InvokeServer(unpack(args))
-					print("[Forge] Auto Sell sold items:", HttpService:JSONEncode(basket))
-				end)
-			end
+		if runCmd then
+			pcall(function()
+				runCmd:InvokeServer(unpack(args))
+				print("[Forge] Sell command sent!")
+			end)
 		else
-			warn("[Forge] Could not find DialogueService for Auto Sell")
+			warn("[Forge] Failed to find DialogueService RunCommand remote!")
 		end
 	end
 end
