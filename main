@@ -76,7 +76,7 @@ local MovementSection = MainFarmTab:CreateSection("Movement Settings")
 
 MainFarmTab:CreateSlider({
 	Name = "Scan Distance",
-	Range = { 100, 5000 },
+	Range = { 100, 500 },
 	Increment = 100,
 	CurrentValue = oreFarm.scanDistance,
 	Flag = "Forge_ScanDistance",
@@ -87,7 +87,7 @@ MainFarmTab:CreateSlider({
 
 MainFarmTab:CreateSlider({
 	Name = "Tween Speed",
-	Range = { 50, 300 },
+	Range = { 30, 100 },
 	Increment = 10,
 	CurrentValue = oreFarm.tweenSpeed,
 	Flag = "Forge_TweenSpeed",
