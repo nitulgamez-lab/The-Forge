@@ -2408,18 +2408,14 @@ local AutoSellTab = Window:CreateTab("Auto Sell", 4483362458)
 
 local autoSell = {
 	enabled = false,
-	selectedItems = {},
+	selectedOres = {},      -- From the static ore list
+	selectedInvItems = {},  -- From the dynamic inventory list
 	interval = 10,
-	sellAmount = 100, -- Default max sell amount
+	sellAmount = 100,
 }
 
--- Initial options
-local currentInvOptions = {}
-if #oreOptions > 0 then
-	currentInvOptions = {unpack(oreOptions)}
-else
-	currentInvOptions = {"Click Refresh Inventory"}
-end
+-- Initial options for dynamic list
+local currentInvOptions = {"Click Refresh Inventory"}
 
 local function getInventoryFromUI()
 	local inv = {}
@@ -2436,12 +2432,10 @@ local function getInventoryFromUI()
 	local container = stash and stash:FindFirstChild("Background")
 	
 	if not container then 
-		-- Fallback check if path is slightly different (e.g. direct child of stash)
 		container = stash 
 	end
 	
 	if not container then
-		-- Only warn if auto sell is actually trying to run
 		if autoSell.enabled then
 			print("[Forge] Debug: Could not find Stash UI at PlayerGui.Menu.Frame.Frame.Menus.Stash.Background")
 		end
@@ -2488,7 +2482,7 @@ local function RefreshInventoryList()
 	if InvDropdown then
 		InvDropdown:Set({
 			Options = currentInvOptions,
-			CurrentOption = {} -- Reset selection to avoid confusion or keep existing valid ones
+			CurrentOption = {} 
 		})
 	end
 	print("[Forge] Refreshed inventory list. Found " .. #options .. " items.")
@@ -2499,15 +2493,27 @@ local function performAutoSell()
 	local basket = {}
 	local hasItems = false
 	
-	local selectedSet = listToSet(autoSell.selectedItems)
+	-- Combine selections from both dropdowns
+	local selectedSet = listToSet(autoSell.selectedOres)
+	local invSet = listToSet(autoSell.selectedInvItems)
+	
+	-- Helper to check if item is selected in either list
+	local function isSelected(name)
+		if selectedSet[name] then return true end
+		if invSet[name] then return true end
+		-- Handle "Any" from ore list
+		if selectedSet["Any"] then
+			for _, v in ipairs(oreOptions) do
+				if v == name then return true end
+			end
+		end
+		return false
+	end
+	
 	local batchSize = tonumber(autoSell.sellAmount) or 100
 	
-	-- Debug: Print inventory found (throttled)
-	-- print("[Forge] Inventory Scan:", HttpService:JSONEncode(inv))
-	
 	for itemName, amount in pairs(inv) do
-		if selectedSet[itemName] and amount > 0 then
-			-- Respect batch size (slider)
+		if isSelected(itemName) and amount > 0 then
 			local sellQty = math.min(amount, batchSize)
 			if sellQty > 0 then
 				basket[itemName] = sellQty
@@ -2526,7 +2532,6 @@ local function performAutoSell()
 		
 		print("[Forge] Attempting to sell:", HttpService:JSONEncode(basket))
 		
-		-- Use exact path provided by user
 		local rs = game:GetService("ReplicatedStorage")
 		local shared = rs:WaitForChild("Shared", 2)
 		local packages = shared and shared:WaitForChild("Packages", 2)
@@ -2564,6 +2569,21 @@ AutoSellTab:CreateToggle({
 	end,
 })
 
+-- Dropdown 1: Pre-defined Ores
+AutoSellTab:CreateDropdown({
+	Name = "Ores to Auto Sell (Pre-select)",
+	Options = oreOptions,
+	MultipleOptions = true,
+	CurrentOption = autoSell.selectedOres,
+	Flag = "Forge_AutoSellOres",
+	Callback = function(opts)
+		if type(opts) == "table" then
+			autoSell.selectedOres = opts
+		end
+	end,
+})
+
+-- Dropdown 2: Dynamic Inventory
 AutoSellTab:CreateButton({
 	Name = "Refresh Inventory List",
 	Callback = function()
@@ -2572,14 +2592,14 @@ AutoSellTab:CreateButton({
 })
 
 InvDropdown = AutoSellTab:CreateDropdown({
-	Name = "Items to Sell (Select from Inv)",
+	Name = "Inventory Items to Sell",
 	Options = currentInvOptions,
 	MultipleOptions = true,
 	CurrentOption = {},
-	Flag = "Forge_AutoSellItems",
+	Flag = "Forge_AutoSellInvItems",
 	Callback = function(opts)
 		if type(opts) == "table" then
-			autoSell.selectedItems = opts
+			autoSell.selectedInvItems = opts
 		end
 	end,
 })
