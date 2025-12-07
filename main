@@ -2404,6 +2404,181 @@ AutoTab:CreateToggle({
 	end,
 })
 
+local AutoSellTab = Window:CreateTab("Auto Sell", 4483362458)
+
+local autoSell = {
+	enabled = false,
+	selectedItems = {},
+	interval = 10,
+}
+
+-- Use existing oreOptions for the dropdown
+if not autoSell.selectedItems or #autoSell.selectedItems == 0 then
+	autoSell.selectedItems = { oreOptions[1] or "Any" }
+end
+
+local function getInventoryFromUI()
+	local inv = {}
+	local pg = LocalPlayer:FindFirstChild("PlayerGui")
+	if not pg then return inv end
+	
+	-- Try to locate the items container based on observed structure
+	-- Path: Menu -> Frame -> Frame -> Menus -> Items (speculative based on Tools path)
+	local menu = pg:FindFirstChild("Menu")
+	local frame1 = menu and menu:FindFirstChild("Frame")
+	local frame2 = frame1 and frame1:FindFirstChild("Frame")
+	local menus = frame2 and frame2:FindFirstChild("Menus")
+	
+	if not menus then return inv end
+	
+	-- Look for 'Items', 'Bag', 'Inventory' or 'Ores'
+	local itemsCont = menus:FindFirstChild("Items") or menus:FindFirstChild("Inventory") or menus:FindFirstChild("Bag") or menus:FindFirstChild("Ores")
+	
+	if not itemsCont then 
+		-- Fallback: check all children of menus for a scrolling frame that looks like inventory
+		for _, child in ipairs(menus:GetChildren()) do
+			if child:FindFirstChild("ScrollingFrame") or child:FindFirstChild("Grid") then
+				itemsCont = child
+				break
+			end
+		end
+	end
+	
+	if not itemsCont then return inv end
+	
+	local scroll = itemsCont:FindFirstChild("ScrollingFrame") or itemsCont:FindFirstChild("Frame") or itemsCont
+	
+	for _, itemFrame in ipairs(scroll:GetChildren()) do
+		if itemFrame:IsA("Frame") or itemFrame:IsA("ImageLabel") then
+			-- Attempt to resolve Item Name
+			local name = itemFrame.Name
+			local nameLabel = itemFrame:FindFirstChild("Name") or itemFrame:FindFirstChild("Title")
+			if nameLabel and nameLabel:IsA("TextLabel") and nameLabel.Text ~= "" then
+				name = nameLabel.Text
+			end
+			
+			-- Attempt to resolve Amount
+			local amt = 1
+			-- Search for Amount/Count label or any number label
+			for _, child in ipairs(itemFrame:GetChildren()) do
+				if child:IsA("TextLabel") then
+					local txt = child.Text
+					if txt:find("x") or tonumber(txt) then
+						local clean = txt:gsub("x", ""):gsub("%s+", "")
+						local n = tonumber(clean)
+						if n then
+							amt = n
+							break
+						end
+					end
+				end
+			end
+			
+			if name and name ~= "" and name ~= "UIGridLayout" and name ~= "UIPadding" then
+				inv[name] = (inv[name] or 0) + amt
+			end
+		end
+	end
+	
+	return inv
+end
+
+local function performAutoSell()
+	local inv = getInventoryFromUI()
+	local basket = {}
+	local hasItems = false
+	
+	local selectedSet = listToSet(autoSell.selectedItems)
+	
+	for itemName, amount in pairs(inv) do
+		-- If user selected "Any", sell everything found in oreOptions
+		local isSelected = selectedSet[itemName]
+		if not isSelected and selectedSet["Any"] then
+			-- Check if itemName is actually an ore
+			for _, v in ipairs(oreOptions) do
+				if v == itemName then
+					isSelected = true
+					break
+				end
+			end
+		end
+
+		if isSelected and amount > 0 then
+			basket[itemName] = amount
+			hasItems = true
+		end
+	end
+	
+	if hasItems then
+		local args = {
+			"SellConfirm",
+			{
+				Basket = basket
+			}
+		}
+		
+		local servicePath = ReplicatedStorage:FindFirstChild("Shared")
+			and ReplicatedStorage.Shared:FindFirstChild("Packages")
+			and ReplicatedStorage.Shared.Packages:FindFirstChild("Knit")
+			and ReplicatedStorage.Shared.Packages.Knit:FindFirstChild("Services")
+			and ReplicatedStorage.Shared.Packages.Knit.Services:FindFirstChild("DialogueService")
+			
+		if servicePath then
+			local rf = servicePath:FindFirstChild("RF")
+			local runCmd = rf and rf:FindFirstChild("RunCommand")
+			if runCmd then
+				pcall(function()
+					runCmd:InvokeServer(unpack(args))
+					print("[Forge] Auto Sell sold items:", HttpService:JSONEncode(basket))
+				end)
+			end
+		else
+			warn("[Forge] Could not find DialogueService for Auto Sell")
+		end
+	end
+end
+
+AutoSellTab:CreateToggle({
+	Name = "Enable Auto Sell",
+	CurrentValue = false,
+	Flag = "Forge_AutoSellEnabled",
+	Callback = function(v)
+		autoSell.enabled = v
+		if v then
+			task.spawn(function()
+				while autoSell.enabled do
+					performAutoSell()
+					task.wait(autoSell.interval or 10)
+				end
+			end)
+		end
+	end,
+})
+
+AutoSellTab:CreateDropdown({
+	Name = "Items to Sell",
+	Options = oreOptions,
+	MultipleOptions = true,
+	CurrentOption = autoSell.selectedItems,
+	Flag = "Forge_AutoSellItems",
+	Callback = function(opts)
+		if type(opts) == "table" and #opts > 0 then
+			autoSell.selectedItems = opts
+		end
+	end,
+})
+
+AutoSellTab:CreateSlider({
+	Name = "Sell Interval (s)",
+	Range = { 5, 120 },
+	Increment = 5,
+	CurrentValue = 10,
+	Flag = "Forge_AutoSellInterval",
+	Callback = function(v)
+		autoSell.interval = v
+	end,
+})
+
 local SettingsTab = Window:CreateTab("Settings", 4483362458)
 
 -- Anti-AFK (non-mouse) - default enabled
