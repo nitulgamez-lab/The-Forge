@@ -1,7 +1,7 @@
 local KeySystem = loadstring(game:HttpGet("https://raw.githubusercontent.com/Nisulrocks/Key-system/refs/heads/main/Main"))()
 
 KeySystem.Config.ScriptName = "NisulRocks The Forge Auto Farm"
-KeySystem.Config.Version    = "V1.0"
+KeySystem.Config.Version    = "V1.1"
 
 KeySystem.Config.StorageId  = "NisulRocks_TheForge_AutoFarm"          -- STABLE ID
 KeySystem.Config.CorrectKey = "NisulrocksTheForge123"  -- CHANGE THIS
@@ -40,8 +40,8 @@ end
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
 local Window = Rayfield:CreateWindow({
-	Name = "The Forge Auto Farm V1.0",
-	LoadingTitle = "The Forge Automation V1.0",
+	Name = "The Forge Auto Farm V1.1",
+	LoadingTitle = "The Forge Automation V1.1",
 	LoadingSubtitle = "By Nisulrocks",
 	ShowText = "The Forge",
 	ToggleUIKeybind = "K",
@@ -61,7 +61,7 @@ local MainFarmTab = Window:CreateTab("Main Farm", 4483362458)
 
 local oreFarm = {
 	enabled = false,
-	tweenSpeed = 120,
+	tweenSpeed = 50,
 	selectedRockTypes = {},
 	selectedOreTypes = {},
 	rocksESPEnabled = false,
@@ -538,7 +538,11 @@ end
 
 local movementBusy = false
 
-local function tweenToPosition(targetPos, speed)
+local function tweenToPosition(targetPos, speed, opts)
+	opts = opts or {}
+	local offset = opts.offset or Vector3.new(0, 3, 0)
+	local lookAtPosition = opts.lookAtPosition
+
 	local hrp = getHumanoidRootPart()
 	if not hrp then return end
 	-- Prevent ores and mobs farms from fighting over movement
@@ -549,8 +553,15 @@ local function tweenToPosition(targetPos, speed)
 	speed = speed or oreFarm.tweenSpeed
 	local distance = (targetPos - hrp.Position).Magnitude
 	local time = math.max(0.1, distance / math.max(10, speed))
+
+	local destination = targetPos + offset
+	if lookAtPosition and (destination - lookAtPosition).Magnitude < 1e-3 then
+		lookAtPosition = lookAtPosition + Vector3.new(0, 1, 0)
+	end
+	local tweenTargetCFrame = lookAtPosition and CFrame.lookAt(destination, lookAtPosition) or CFrame.new(destination)
+
 	local tween = TweenService:Create(hrp, TweenInfo.new(time, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {
-		CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0)),
+		CFrame = tweenTargetCFrame,
 	})
 	tween.Completed:Connect(function()
 		movementBusy = false
@@ -558,6 +569,82 @@ local function tweenToPosition(targetPos, speed)
 	tween:Play()
 	tween.Completed:Wait()
 	movementBusy = false
+end
+
+local function moveUnderTarget(part, opts)
+	if not (part and part:IsA("BasePart")) then return function() end end
+	opts = opts or {}
+	local maintain = (opts.maintain ~= false)
+	local extraClearance = opts.extraClearance or 4
+	local partHeight = (part.Size and part.Size.Y) or 4
+	local halfHeight = partHeight / 2
+
+	local function computeDestination(targetPart)
+		local targetPos = targetPart.Position
+		return Vector3.new(
+			targetPos.X,
+			targetPos.Y - (halfHeight + extraClearance),
+			targetPos.Z
+		)
+	end
+
+	local minY = (workspace and workspace.FallenPartsDestroyHeight) or -500
+	local destination = computeDestination(part)
+	if destination.Y < minY + 10 then
+		destination = Vector3.new(destination.X, minY + 10, destination.Z)
+	end
+	local lookAtPosition = opts.lookAtPosition or part.Position
+
+	tweenToPosition(destination, opts.speed or oreFarm.tweenSpeed, {
+		offset = Vector3.new(0, 0, 0),
+		lookAtPosition = lookAtPosition,
+	})
+
+	if not maintain then
+		return function() end
+	end
+
+	local active = true
+	local connection
+	local function stop()
+		if not active then return end
+		active = false
+		if connection then
+			connection:Disconnect()
+			connection = nil
+		end
+	end
+
+	connection = RunService.Heartbeat:Connect(function()
+		if not active then
+			stop()
+			return
+		end
+		if not part or not part.Parent then
+			stop()
+			return
+		end
+		local hrp = getHumanoidRootPart()
+		if not hrp then
+			return
+		end
+
+		local currentDestination = computeDestination(part)
+		if currentDestination.Y < minY + 10 then
+			currentDestination = Vector3.new(currentDestination.X, minY + 10, currentDestination.Z)
+		end
+
+		local currentPos = hrp.Position
+		local delta = currentDestination - currentPos
+		if delta.Magnitude > 0.05 then
+			hrp.CFrame = CFrame.lookAt(currentDestination, part.Position)
+		else
+			hrp.CFrame = CFrame.lookAt(currentDestination, part.Position)
+		end
+		hrp.AssemblyLinearVelocity = Vector3.new()
+	end)
+
+	return stop
 end
 
 -- Ore detection inside a rock model
@@ -898,11 +985,14 @@ MainFarmTab:CreateToggle({
 					continue
 				end
 				
-				-- Tween to rock
+				-- Tween beneath the rock, facing it
 				local core = targetRock.core
 				if core and core:IsA("BasePart") then
 					pcall(function()
-						tweenToPosition(core.Position, oreFarm.tweenSpeed)
+						moveUnderTarget(core, {
+							speed = oreFarm.tweenSpeed,
+							extraClearance = 3,
+						})
 					end)
 				end
 				
@@ -1173,7 +1263,10 @@ MainFarmTab:CreateToggle({
 				local mobHrp = target.hrp
 				if mobHrp and mobHrp:IsA("BasePart") then
 					pcall(function()
-						tweenToPosition(mobHrp.Position, oreFarm.tweenSpeed)
+						moveUnderTarget(mobHrp, {
+							speed = oreFarm.tweenSpeed,
+							extraClearance = 2,
+						})
 					end)
 				end
 				
