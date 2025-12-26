@@ -1,7 +1,7 @@
 local KeySystem = loadstring(game:HttpGet("https://raw.githubusercontent.com/Nisulrocks/Key-system/refs/heads/main/Main"))()
 
 KeySystem.Config.ScriptName = "NisulRocks The Forge Auto Farm"
-KeySystem.Config.Version    = "V1.1"
+KeySystem.Config.Version    = "V1.0.1"
 
 KeySystem.Config.StorageId  = "NisulRocks_TheForge_AutoFarm"          -- STABLE ID
 KeySystem.Config.CorrectKey = "NisulrocksTheForge123"  -- CHANGE THIS
@@ -40,8 +40,8 @@ end
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
 local Window = Rayfield:CreateWindow({
-	Name = "The Forge Auto Farm V1.1",
-	LoadingTitle = "The Forge Automation V1.1",
+	Name = "The Forge Auto Farm V1.0.1",
+	LoadingTitle = "The Forge Automation V1.0.1",
 	LoadingSubtitle = "By Nisulrocks",
 	ShowText = "The Forge",
 	ToggleUIKeybind = "K",
@@ -61,7 +61,7 @@ local MainFarmTab = Window:CreateTab("Main Farm", 4483362458)
 
 local oreFarm = {
 	enabled = false,
-	tweenSpeed = 50,
+	tweenSpeed = 30,
 	selectedRockTypes = {},
 	selectedOreTypes = {},
 	rocksESPEnabled = false,
@@ -183,6 +183,7 @@ RockTypeDropdown = MainFarmTab:CreateDropdown({
 	Callback = function(opts)
 		if type(opts) == "table" and #opts > 0 then
 			oreFarm.selectedRockTypes = opts
+			stopActiveMover()
 		end
 	end,
 })
@@ -956,13 +957,23 @@ MainFarmTab:CreateToggle({
 		task.spawn(function()
 			local rockBlacklist = {} -- Tracks rocks we don't want to mine again
 			local blacklistCleanupTimer = 0
-			
+			local activeMoverStop
+
+			local function stopActiveMover()
+				if activeMoverStop then
+					pcall(activeMoverStop)
+					activeMoverStop = nil
+				end
+			end
+
 			while oreFarm.enabled do
 				-- Clean blacklist every 30 seconds (in case rocks respawn)
 				if tick() - blacklistCleanupTimer > 30 then
 					table.clear(rockBlacklist)
 					blacklistCleanupTimer = tick()
 				end
+				
+				stopActiveMover()
 				
 				-- Ensure pickaxe is equipped
 				local pick = ensurePickaxeEquipped()
@@ -984,12 +995,19 @@ MainFarmTab:CreateToggle({
 					task.wait(0.5)
 					continue
 				end
+
+				-- Skip already destroyed/invalid rocks
+				if not targetRock.model or not targetRock.model.Parent or isRockDestroyed(targetRock.model) then
+					rockBlacklist[targetRock.model] = true
+					continue
+				end
 				
 				-- Tween beneath the rock, facing it
 				local core = targetRock.core
 				if core and core:IsA("BasePart") then
 					pcall(function()
-						moveUnderTarget(core, {
+						stopActiveMover()
+						activeMoverStop = moveUnderTarget(core, {
 							speed = oreFarm.tweenSpeed,
 							extraClearance = 3,
 						})
@@ -999,11 +1017,13 @@ MainFarmTab:CreateToggle({
 				-- Check if still enabled and rock still exists
 				if not oreFarm.enabled then break end
 				if not targetRock.model or not targetRock.model.Parent then
+					stopActiveMover()
 					continue
 				end
 				
 				-- Mine the rock
 				local result = mineRock(targetRock, oreFarm.selectedOreTypes)
+				stopActiveMover()
 				
 				-- If we switched because of wrong ore, blacklist this rock
 				if result == "switch" then
@@ -1242,8 +1262,17 @@ MainFarmTab:CreateToggle({
 		mobFarm.enabled = v and true or false
 		if not mobFarm.enabled then return end
 		task.spawn(function()
+			local activeMobMoverStop
+			local function stopMobMover()
+				if activeMobMoverStop then
+					pcall(activeMobMoverStop)
+					activeMobMoverStop = nil
+				end
+			end
+
 			while mobFarm.enabled do
 				if isLowHealthForMobs() then
+					stopMobMover()
 					retreatToSafety()
 					continue
 				end
@@ -1256,14 +1285,21 @@ MainFarmTab:CreateToggle({
 				local selectedSet = listToSet(mobFarm.selectedMobs)
 				local target = getNearestMob(selectedSet)
 				if not target then
+					stopMobMover()
 					wait(0.2)
 					continue
 				end
 				
+				if isMobDead(target.model) then
+					stopMobMover()
+					continue
+				end
+
 				local mobHrp = target.hrp
 				if mobHrp and mobHrp:IsA("BasePart") then
 					pcall(function()
-						moveUnderTarget(mobHrp, {
+						stopMobMover()
+						activeMobMoverStop = moveUnderTarget(mobHrp, {
 							speed = oreFarm.tweenSpeed,
 							extraClearance = 2,
 						})
@@ -1272,19 +1308,24 @@ MainFarmTab:CreateToggle({
 				
 				-- Mob might have died while moving; if so, skip attacking and retarget
 				if isMobDead(target.model) then
+					stopMobMover()
 					continue
 				end
 				
 				if not mobFarm.enabled then break end
 				if not target.model or not target.model.Parent then
+					stopMobMover()
 					continue
 				end
 
 				attackMob(target)
+				stopMobMover()
 				local interval = tonumber(mobFarm.attackInterval) or 0.1
 				if interval < 0.02 then interval = 0.02 end
 				wait(interval)
 			end
+
+			stopMobMover()
 		end)
 	end,
 })
